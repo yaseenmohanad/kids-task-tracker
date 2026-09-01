@@ -1,0 +1,23 @@
+{
+  // Cloudflare config for the Kids Daily Task Tracker.
+  //
+  // This is a "static assets only" Worker: there is no worker script, so
+  // Cloudflare just serves the files in ./public straight from its edge.
+  // Connected to GitHub via the dashboard's "Workers Builds", which runs
+  // `npx wrangler deploy` on every push to main and reads this file.
+  //
+  // When we add server-side bits later (scheduled daily task reset, or
+  // Supabase calls that need a service key), add a "main" entry pointing at
+  // a worker script and the assets keep working alongside it.
+  "name": "kids-task-tracker",
+  "compatibility_date": "2025-04-01",
+  "assets": {
+    "directory": "./public",
+    // Any unknown path serves index.html instead of a 404 — the app is a
+    // single page, so /whatever should still land on the tracker.
+    "not_found_handling": "single-page-application"
+  },
+  "observability": {
+    "enabled": true
+  }
+}

@@ -5,29 +5,47 @@ no build step, no dependencies, no internet needed (the web font is the only opt
 
 ## Run it
 
-Just double-click `index.html`, or serve the folder:
+Just double-click `public/index.html`, or serve the folder:
 
 ```bash
-npx http-server C:/Users/QK/kids-task-tracker -p 5601 -c-1
+npx http-server public -p 5601 -c-1
 ```
 
 ## Files
 
 | File | What's in it |
 | --- | --- |
-| `index.html` | Page structure |
-| `styles.css` | Colors, layout, animations, light + dark themes |
-| `script.js` | All the behaviour and `localStorage` saving |
-| `_headers` | Cloudflare Pages cache + security headers |
+| `public/index.html` | Page structure |
+| `public/styles.css` | Colors, layout, animations, light + dark themes |
+| `public/script.js` | All the behaviour and `localStorage` saving |
+| `public/_headers` | Cache + security headers served by Cloudflare |
+| `wrangler.jsonc` | Cloudflare config — a static-assets-only Worker serving `public/` |
 
-## Deploying (Cloudflare Pages)
+## Deploying (Cloudflare Workers)
 
-The site is static, so there is no build step.
+There is no build step: `wrangler deploy` uploads `public/` to Cloudflare's edge as
+static assets. No worker script exists yet, so nothing runs server-side.
 
-1. In the [Cloudflare dashboard](https://dash.cloudflare.com) go to **Workers & Pages → Create → Pages → Connect to Git**.
-2. Pick the `kids-task-tracker` repo.
-3. Settings: **Framework preset** `None`, **Build command** *(empty)*, **Build output directory** `/`.
-4. Save and deploy. Every push to `main` deploys automatically, and other branches get preview URLs.
+Deploys happen automatically through **Workers Builds** — the dashboard is connected to
+this GitHub repo, and every push to `main` triggers a deploy. Dashboard build settings
+(Workers → kids-task-tracker → Settings → Builds):
+
+- **Build command:** *(empty)*
+- **Deploy command:** `npx wrangler deploy`
+- **Root directory:** `/`
+
+To deploy by hand instead:
+
+```bash
+npx wrangler login
+npm run deploy
+```
+
+Check the config without deploying anything:
+
+```bash
+npx wrangler deploy --dry-run
+```
 
 ## Roadmap (Supabase)
 

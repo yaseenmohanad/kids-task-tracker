@@ -1,0 +1,14 @@
+{
+  "name": "kids-task-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Colorful daily task tracker for kids - static site on Cloudflare Workers",
+  "scripts": {
+    "dev": "wrangler dev",
+    "serve": "http-server public -p 5601 -c-1",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.97.0"
+  }
+}
