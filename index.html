@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="description" content="A colorful daily task tracker for kids — earn stars, level up, and check off your chores!" />
+  <title>⭐ Kids Daily Task Tracker</title>
+  <meta name="theme-color" content="#fff7f0" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⭐</text></svg>" />
+</head>
+<body>
+  <div class="blob blob--1" aria-hidden="true"></div>
+  <div class="blob blob--2" aria-hidden="true"></div>
+  <div class="blob blob--3" aria-hidden="true"></div>
+
+  <main class="app">
+    <!-- ── Header ───────────────────────────────────────── -->
+    <header class="header">
+      <div class="header__top">
+        <h1 class="title">
+          <span class="title__emoji" aria-hidden="true">⭐</span>
+          <span>My Daily Tasks</span>
+        </h1>
+        <button id="themeToggle" class="theme-btn" type="button" aria-label="Switch to dark mode" title="Dark mode">
+          <span class="theme-btn__icon" aria-hidden="true">🌙</span>
+        </button>
+      </div>
+      <p class="subtitle" id="greeting">Let's get things done today!</p>
+    </header>
+
+    <!-- ── Score cards ──────────────────────────────────── -->
+    <section class="scoreboard" aria-label="Your rewards">
+      <div class="score-card score-card--points">
+        <span class="score-card__emoji" aria-hidden="true">🌟</span>
+        <div>
+          <strong id="pointsValue" class="score-card__value">0</strong>
+          <span class="score-card__label">Points</span>
+        </div>
+      </div>
+      <div class="score-card score-card--level">
+        <span class="score-card__emoji" aria-hidden="true">🏆</span>
+        <div>
+          <strong id="levelValue" class="score-card__value">1</strong>
+          <span class="score-card__label" id="levelLabel">Level</span>
+        </div>
+      </div>
+      <div class="score-card score-card--done">
+        <span class="score-card__emoji" aria-hidden="true">✅</span>
+        <div>
+          <strong id="doneValue" class="score-card__value">0/0</strong>
+          <span class="score-card__label">Done</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Progress ─────────────────────────────────────── -->
+    <section class="progress" aria-label="Progress">
+      <div class="progress__head">
+        <span class="progress__title">Today's progress</span>
+        <span class="progress__pct" id="progressPct">0%</span>
+      </div>
+      <div class="progress__track" role="progressbar" id="progressBar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Tasks completed">
+        <div class="progress__fill" id="progressFill" style="width:0%">
+          <span class="progress__runner" aria-hidden="true">🚀</span>
+        </div>
+      </div>
+      <p class="progress__msg" id="progressMsg">Add your first task to begin! 🎈</p>
+    </section>
+
+    <!-- ── Add task form ────────────────────────────────── -->
+    <form class="add-form" id="addForm" autocomplete="off">
+      <label class="sr-only" for="taskInput">New task</label>
+      <input
+        id="taskInput"
+        class="add-form__input"
+        type="text"
+        placeholder="What do you need to do? 📝"
+        maxlength="80"
+        required
+      />
+      <div class="add-form__row">
+        <div class="priority-picker" role="radiogroup" aria-label="Task priority">
+          <input type="radio" name="priority" id="prio-low" value="low" />
+          <label for="prio-low" class="chip chip--low">🟢 Low</label>
+
+          <input type="radio" name="priority" id="prio-medium" value="medium" checked />
+          <label for="prio-medium" class="chip chip--medium">🟡 Medium</label>
+
+          <input type="radio" name="priority" id="prio-high" value="high" />
+          <label for="prio-high" class="chip chip--high">🔴 High</label>
+        </div>
+        <button class="add-btn" type="submit">
+          <span aria-hidden="true">➕</span> Add Task
+        </button>
+      </div>
+      <p class="add-form__hint" id="formHint" role="status"></p>
+    </form>
+
+    <!-- ── Filters ──────────────────────────────────────── -->
+    <section class="filters" aria-label="Filter tasks">
+      <div class="filters__group" role="tablist">
+        <button class="filter is-active" type="button" data-filter="all" role="tab" aria-selected="true">
+          All <span class="filter__count" id="countAll">0</span>
+        </button>
+        <button class="filter" type="button" data-filter="pending" role="tab" aria-selected="false">
+          Pending <span class="filter__count" id="countPending">0</span>
+        </button>
+        <button class="filter" type="button" data-filter="completed" role="tab" aria-selected="false">
+          Completed <span class="filter__count" id="countCompleted">0</span>
+        </button>
+      </div>
+      <button class="clear-btn" type="button" id="clearDone" hidden>🧹 Clear done</button>
+    </section>
+
+    <!-- ── Task list ────────────────────────────────────── -->
+    <ul class="task-list" id="taskList" aria-live="polite"></ul>
+
+    <div class="empty" id="emptyState">
+      <span class="empty__emoji" aria-hidden="true">🦄</span>
+      <h2 class="empty__title">No tasks here yet!</h2>
+      <p class="empty__text">Type something above and hit <strong>Add Task</strong> to earn your first stars.</p>
+    </div>
+
+    <footer class="footer">
+      <p>Made with 💜 — your tasks are saved on this device.</p>
+      <button class="reset-btn" type="button" id="resetAll">Reset everything</button>
+    </footer>
+  </main>
+
+  <!-- Toast + confetti layers -->
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div class="confetti" id="confetti" aria-hidden="true"></div>
+
+  <script src="script.js"></script>
+</body>
+</html>

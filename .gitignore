@@ -1,0 +1,17 @@
+# OS / editor junk
+Thumbs.db
+desktop.ini
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# tooling
+node_modules/
+.wrangler/
+.cache/
+
+# local secrets - never commit these
+.env
+.env.*
+!.env.example
