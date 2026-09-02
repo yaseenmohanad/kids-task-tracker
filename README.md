@@ -17,9 +17,12 @@ npx http-server public -p 5601 -c-1
 | --- | --- |
 | `public/index.html` | Page structure |
 | `public/styles.css` | Colors, layout, animations, light + dark themes |
-| `public/script.js` | All the behaviour and `localStorage` saving |
+| `public/script.js` | The app: tasks, points, rendering, `localStorage`, sync/merge rules |
+| `public/cloud.js` | Supabase auth + REST over plain `fetch` (no dependencies) |
+| `public/config.js` | Your Supabase URL + anon key |
 | `public/_headers` | Cache + security headers served by Cloudflare |
 | `wrangler.jsonc` | Cloudflare config — a static-assets-only Worker serving `public/` |
+| `supabase/migration_001_sync.sql` | Tables, RLS policies and the profile trigger |
 
 ## Deploying (Cloudflare Workers)
 
@@ -47,11 +50,53 @@ Check the config without deploying anything:
 npx wrangler deploy --dry-run
 ```
 
-## Roadmap (Supabase)
+## Cross-device sync (Supabase)
 
-Currently everything is local to the browser. Next step is a Supabase project for
-accounts and cross-device sync — the storage layer in `script.js` (`save()` / `load()`)
-is the only place that needs to change.
+Sign in and the same tasks, stars and theme appear on every device. Signed out, the app
+is unchanged: everything stays in `localStorage` and the sign-in button is hidden.
+
+### Setup
+
+1. Create a Supabase project.
+2. **SQL Editor → New query** → paste `supabase/migration_001_sync.sql` → **Run**.
+   The last statement should report `rowsecurity = true` for both tables.
+3. Copy **Project URL** and the **anon / public** key from Project Settings, and put them
+   in `public/config.js`.
+4. Commit and push. Cloudflare redeploys, and the ☁️ button appears in the header.
+
+Both values in `config.js` are public by design — the anon key is meant to ship in
+client code, and every request it makes is still checked against the RLS policies.
+**Never put the `service_role` key in this repo**: it bypasses RLS entirely.
+
+Supabase confirms email addresses by default, so a new account has to click the link in
+its inbox before the first sign-in. To skip that for family use:
+**Authentication → Sign In / Providers → Email → turn off "Confirm email"**.
+
+### How sync works
+
+- **Last write wins, per task.** Every change stamps `updated_at` on the device that made
+  it. On sync, whichever side is newer for that task wins. There is no locking and no
+  merge prompt — for one family's chore list, newest-wins is the honest model.
+- **Deletes are soft.** A deleted task keeps its row with `deleted_at` set, hidden from
+  the UI. A hard delete would let another device that still has the task upload it again,
+  resurrecting it forever. Tombstones older than 30 days are pruned locally.
+- **Points and theme** live on one `profiles` row under the same rule. Points are stored
+  rather than recalculated because "Clear done" removes finished tasks but keeps the stars.
+- **Sync is debounced** (~0.9s), so ticking off five tasks is one upload. It also runs on
+  sign-in, on coming back online, and when you return to the tab.
+- **Failures are safe.** A failed sync never touches local data; the pill shows
+  `Sync failed` / `Offline` and the next attempt picks up where it left off. A network
+  error does *not* sign you out — only a definitively rejected refresh token does.
+- **Example tasks never pollute an account.** The four starter tasks are flagged as
+  examples and dropped on first sync if the account already has real tasks.
+- **Signing out clears the local copy** (it is safely in the account). That matters on a
+  shared device: the next person to sign in must not inherit someone else's tasks. If a
+  sync is still pending, it flushes first and warns if it can't.
+
+### Not covered yet
+
+Realtime push (changes appear on the next sync, not instantly), multiple kid profiles
+under one parent account, streaks, and a rewards store.
 
 ## Features
 

@@ -25,9 +25,15 @@
           <span class="title__emoji" aria-hidden="true">⭐</span>
           <span>My Daily Tasks</span>
         </h1>
-        <button id="themeToggle" class="theme-btn" type="button" aria-label="Switch to dark mode" title="Dark mode">
-          <span class="theme-btn__icon" aria-hidden="true">🌙</span>
-        </button>
+        <div class="header__actions">
+          <span class="sync-pill" id="syncPill" role="status" hidden></span>
+          <button id="accountBtn" class="theme-btn" type="button" aria-label="Sign in to sync your tasks" title="Sign in to sync" hidden>
+            <span class="theme-btn__icon" id="accountIcon" aria-hidden="true">☁️</span>
+          </button>
+          <button id="themeToggle" class="theme-btn" type="button" aria-label="Switch to dark mode" title="Dark mode">
+            <span class="theme-btn__icon" aria-hidden="true">🌙</span>
+          </button>
+        </div>
       </div>
       <p class="subtitle" id="greeting">Let's get things done today!</p>
     </header>
@@ -126,15 +132,50 @@
     </div>
 
     <footer class="footer">
-      <p>Made with 💜 — your tasks are saved on this device.</p>
+      <p id="footerNote">Made with 💜 — your tasks are saved on this device.</p>
       <button class="reset-btn" type="button" id="resetAll">Reset everything</button>
     </footer>
   </main>
+
+  <!-- ── Account sheet ──────────────────────────────────── -->
+  <dialog class="sheet" id="authSheet" aria-labelledby="authTitle">
+    <button class="sheet__close" id="authClose" type="button" aria-label="Close">✕</button>
+
+    <!-- Signed out: sign in / create account -->
+    <form class="sheet__panel" id="authForm" autocomplete="on">
+      <h2 class="sheet__title" id="authTitle">Sign in to sync ☁️</h2>
+      <p class="sheet__text" id="authIntro">Your tasks and stars will follow you to any device.</p>
+
+      <label class="sheet__label" for="authEmail">Email</label>
+      <input class="sheet__input" id="authEmail" name="email" type="email"
+             autocomplete="email" placeholder="you@example.com" required />
+
+      <label class="sheet__label" for="authPassword">Password</label>
+      <input class="sheet__input" id="authPassword" name="password" type="password"
+             autocomplete="current-password" minlength="6" placeholder="At least 6 characters" required />
+
+      <p class="sheet__message" id="authError" role="alert"></p>
+
+      <button class="add-btn" id="authSubmit" type="submit">Sign in</button>
+      <button class="sheet__link" id="authToggle" type="button">New here? Create an account</button>
+      <button class="sheet__link" id="authForgot" type="button">Forgot password?</button>
+    </form>
+
+    <!-- Signed in: account details -->
+    <div class="sheet__panel" id="authAccount" hidden>
+      <h2 class="sheet__title">Synced ✅</h2>
+      <p class="sheet__text">Signed in as <strong id="authWho"></strong>. Your tasks and stars are saved to your account.</p>
+      <button class="add-btn" id="syncNowBtn" type="button">🔄 Sync now</button>
+      <button class="clear-btn" id="signOutBtn" type="button">Sign out</button>
+    </div>
+  </dialog>
 
   <!-- Toast + confetti layers -->
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <div class="confetti" id="confetti" aria-hidden="true"></div>
 
+  <script src="config.js"></script>
+  <script src="cloud.js"></script>
   <script src="script.js"></script>
 </body>
 </html>

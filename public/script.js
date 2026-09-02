@@ -39,13 +39,21 @@
     "Amazing! 💖"
   ];
 
+  // Sync tuning
+  var SYNC_DEBOUNCE = 900;                        // quiet period before pushing
+  var TOMBSTONE_TTL = 30 * 24 * 60 * 60 * 1000;   // forget deletions after 30 days
+
   /* -- State ------------------------------------------------ */
 
   var state = {
-    tasks: [],          // { id, text, priority, completed, createdAt, completedAt }
+    // A task carries updatedAt (last-write-wins key) and deletedAt (soft
+    // delete). Soft deletes matter: hard-deleting locally would let another
+    // device that still has the task re-upload it, resurrecting it forever.
+    tasks: [],          // { id, text, priority, completed, createdAt, completedAt, updatedAt, deletedAt }
     points: 0,          // total stars earned (never goes below 0)
-    filter: "all",      // all | pending | completed
-    theme: "light"      // light | dark
+    filter: "all",      // all | pending | completed  (stays local to this device)
+    theme: "light",     // light | dark
+    profileUpdatedAt: 0 // when points/theme last changed here, for the same LWW rule
   };
 
   /* -- Elements --------------------------------------------- */
@@ -79,7 +87,28 @@
     themeToggle: document.getElementById("themeToggle"),
 
     toast: document.getElementById("toast"),
-    confetti: document.getElementById("confetti")
+    confetti: document.getElementById("confetti"),
+
+    // Cloud / account UI
+    syncPill: document.getElementById("syncPill"),
+    accountBtn: document.getElementById("accountBtn"),
+    accountIcon: document.getElementById("accountIcon"),
+    authSheet: document.getElementById("authSheet"),
+    authForm: document.getElementById("authForm"),
+    authTitle: document.getElementById("authTitle"),
+    authIntro: document.getElementById("authIntro"),
+    authEmail: document.getElementById("authEmail"),
+    authPassword: document.getElementById("authPassword"),
+    authError: document.getElementById("authError"),
+    authSubmit: document.getElementById("authSubmit"),
+    authToggle: document.getElementById("authToggle"),
+    authForgot: document.getElementById("authForgot"),
+    authClose: document.getElementById("authClose"),
+    authAccount: document.getElementById("authAccount"),
+    authWho: document.getElementById("authWho"),
+    syncNowBtn: document.getElementById("syncNowBtn"),
+    signOutBtn: document.getElementById("signOutBtn"),
+    footerNote: document.getElementById("footerNote")
   };
 
   /* -- Storage ---------------------------------------------- */
@@ -90,7 +119,8 @@
         tasks: state.tasks,
         points: state.points,
         filter: state.filter,
-        theme: state.theme
+        theme: state.theme,
+        profileUpdatedAt: state.profileUpdatedAt
       }));
     } catch (err) {
       // Private browsing / storage full - the app still works for this session.
@@ -117,18 +147,26 @@
     if (!data || typeof data !== "object") return;
 
     if (Array.isArray(data.tasks)) {
+      var cutoff = Date.now() - TOMBSTONE_TTL;
       state.tasks = data.tasks
         .filter(function (t) { return t && typeof t.text === "string"; })
         .map(function (t) {
+          var createdAt = typeof t.createdAt === "number" ? t.createdAt : Date.now();
           return {
             id: typeof t.id === "string" ? t.id : makeId(),
             text: t.text.slice(0, 80),
             priority: POINTS[t.priority] ? t.priority : "medium",
             completed: !!t.completed,
-            createdAt: typeof t.createdAt === "number" ? t.createdAt : Date.now(),
-            completedAt: typeof t.completedAt === "number" ? t.completedAt : null
+            createdAt: createdAt,
+            completedAt: typeof t.completedAt === "number" ? t.completedAt : null,
+            // Saves written before sync existed have no updatedAt.
+            updatedAt: typeof t.updatedAt === "number" ? t.updatedAt : createdAt,
+            deletedAt: typeof t.deletedAt === "number" ? t.deletedAt : null,
+            seed: !!t.seed
           };
-        });
+        })
+        // Old tombstones have done their job - every device has seen them.
+        .filter(function (t) { return !t.deletedAt || t.deletedAt > cutoff; });
     }
     if (typeof data.points === "number" && isFinite(data.points)) {
       state.points = Math.max(0, Math.round(data.points));
@@ -138,6 +176,9 @@
     }
     if (data.theme === "dark" || data.theme === "light") {
       state.theme = data.theme;
+    }
+    if (typeof data.profileUpdatedAt === "number" && isFinite(data.profileUpdatedAt)) {
+      state.profileUpdatedAt = data.profileUpdatedAt;
     }
   }
 
@@ -151,11 +192,35 @@
     return arr[Math.floor(Math.random() * arr.length)];
   }
 
+  // Deleted tasks stick around as tombstones for sync, but the app - counts,
+  // progress, list - must behave as if they are gone.
+  function activeTasks() {
+    return state.tasks.filter(function (t) { return !t.deletedAt; });
+  }
+
+  // Stamp a task as changed on this device. Every mutation goes through here,
+  // otherwise sync cannot tell which side is newer.
+  function touch(task) {
+    task.updatedAt = Date.now();
+    delete task.seed;   // once a user touches an example task it is theirs
+    return task;
+  }
+
+  function touchProfile() {
+    state.profileUpdatedAt = Date.now();
+  }
+
+  function toMs(value) {
+    var ms = Date.parse(value);
+    return isFinite(ms) ? ms : 0;
+  }
+
   function stats() {
-    var total = state.tasks.length;
+    var list = activeTasks();
+    var total = list.length;
     var done = 0;
     for (var i = 0; i < total; i++) {
-      if (state.tasks[i].completed) done++;
+      if (list[i].completed) done++;
     }
     return {
       total: total,
@@ -173,7 +238,7 @@
 
   function findTask(id) {
     for (var i = 0; i < state.tasks.length; i++) {
-      if (state.tasks[i].id === id) return state.tasks[i];
+      if (state.tasks[i].id === id && !state.tasks[i].deletedAt) return state.tasks[i];
     }
     return null;
   }
@@ -186,7 +251,7 @@
   }
 
   function renderList() {
-    var visible = state.tasks.filter(function (t) {
+    var visible = activeTasks().filter(function (t) {
       if (state.filter === "completed") return t.completed;
       if (state.filter === "pending") return !t.completed;
       return true;
@@ -357,15 +422,19 @@
   /* -- Actions ---------------------------------------------- */
 
   function addTask(text, priority) {
+    var now = Date.now();
     state.tasks.push({
       id: makeId(),
       text: text,
       priority: priority,
       completed: false,
-      createdAt: Date.now(),
-      completedAt: null
+      createdAt: now,
+      completedAt: null,
+      updatedAt: now,
+      deletedAt: null
     });
     save();
+    scheduleSync();
     render();
     toast("Task added! " + PRIORITY_EMOJI[priority] + " Worth " + POINTS[priority] + " stars");
   }
@@ -379,6 +448,7 @@
 
     task.completed = !task.completed;
     task.completedAt = task.completed ? Date.now() : null;
+    touch(task);
 
     var earned = POINTS[task.priority];
     if (task.completed) {
@@ -386,8 +456,10 @@
     } else {
       state.points = Math.max(0, state.points - earned);
     }
+    touchProfile();
 
     save();
+    scheduleSync();
     render();
     bump(el.points.closest(".score-card"));
 
@@ -417,10 +489,15 @@
     // Completed tasks give their stars back when removed, so points stay honest.
     if (task.completed) {
       state.points = Math.max(0, state.points - POINTS[task.priority]);
+      touchProfile();
     }
 
-    state.tasks = state.tasks.filter(function (t) { return t.id !== id; });
+    // Soft delete: the row stays as a tombstone so the deletion reaches every
+    // other device instead of being undone by one that still has the task.
+    task.deletedAt = Date.now();
+    touch(task);
     save();
+    scheduleSync();
 
     if (row) {
       row.classList.add("is-leaving");
@@ -432,22 +509,37 @@
   }
 
   function clearCompleted() {
-    var done = state.tasks.filter(function (t) { return t.completed; });
+    var done = activeTasks().filter(function (t) { return t.completed; });
     if (done.length === 0) return;
 
     // Clearing tidies the list but keeps the stars already earned.
-    state.tasks = state.tasks.filter(function (t) { return !t.completed; });
+    done.forEach(function (t) {
+      t.deletedAt = Date.now();
+      touch(t);
+    });
     save();
+    scheduleSync();
     render();
     toast("Cleared " + done.length + (done.length === 1 ? " task" : " tasks") + " - stars kept! ⭐");
   }
 
   function resetEverything() {
-    if (!window.confirm("Delete all tasks and reset your stars back to zero?")) return;
-    state.tasks = [];
+    var warning = signedIn()
+      ? "Delete all tasks and reset your stars to zero? This clears them on every device you are signed in on."
+      : "Delete all tasks and reset your stars back to zero?";
+    if (!window.confirm(warning)) return;
+
+    // Tombstone rather than drop, so the reset propagates instead of the
+    // tasks flowing straight back down on the next sync.
+    activeTasks().forEach(function (t) {
+      t.deletedAt = Date.now();
+      touch(t);
+    });
     state.points = 0;
     state.filter = "all";
+    touchProfile();
     save();
+    scheduleSync();
     syncFilterButtons();
     render();
     toast("Fresh start! 🌟");
@@ -479,9 +571,341 @@
 
   function toggleTheme() {
     state.theme = state.theme === "dark" ? "light" : "dark";
+    touchProfile();
     applyTheme();
     save();
+    scheduleSync();
     toast(state.theme === "dark" ? "Dark mode on 🌙" : "Light mode on ☀️");
+  }
+
+  /* -- Cloud sync -------------------------------------------- */
+
+  var cloud = window.KTT_CLOUD || null;
+  var syncTimer = null;
+  var syncing = false;
+  var syncQueued = false;
+
+  function cloudReady() {
+    return !!(cloud && cloud.isConfigured());
+  }
+
+  function signedIn() {
+    return cloudReady() && cloud.isSignedIn();
+  }
+
+  function setSyncStatus(kind, text) {
+    if (!el.syncPill) return;
+    if (!kind) { el.syncPill.hidden = true; return; }
+    el.syncPill.hidden = false;
+    el.syncPill.textContent = text;
+    el.syncPill.className = "sync-pill sync-pill--" + kind;
+  }
+
+  // Mutations call this instead of syncing immediately - ticking off five
+  // tasks in a row should be one upload, not five.
+  function scheduleSync() {
+    if (!signedIn()) return;
+    setSyncStatus("pending", "Saving…");
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(syncNow, SYNC_DEBOUNCE);
+  }
+
+  function rowFromTask(t) {
+    return {
+      user_id: cloud.currentUser().id,
+      id: t.id,
+      text: t.text,
+      priority: t.priority,
+      completed: !!t.completed,
+      created_at: new Date(t.createdAt).toISOString(),
+      completed_at: t.completedAt ? new Date(t.completedAt).toISOString() : null,
+      deleted_at: t.deletedAt ? new Date(t.deletedAt).toISOString() : null,
+      updated_at: new Date(t.updatedAt).toISOString()
+    };
+  }
+
+  function taskFromRow(r) {
+    var createdAt = toMs(r.created_at) || Date.now();
+    return {
+      id: String(r.id),
+      text: String(r.text || "").slice(0, 80),
+      priority: POINTS[r.priority] ? r.priority : "medium",
+      completed: !!r.completed,
+      createdAt: createdAt,
+      completedAt: r.completed_at ? toMs(r.completed_at) : null,
+      deletedAt: r.deleted_at ? toMs(r.deleted_at) : null,
+      updatedAt: toMs(r.updated_at) || createdAt
+    };
+  }
+
+  // Merge remote rows into local state, newest write winning per task, and
+  // return the rows that need uploading.
+  function mergeTasks(remoteRows) {
+    // A fresh browser seeds four example tasks. If this account already has
+    // real tasks, those examples are noise - drop them rather than upload.
+    if (remoteRows.length) {
+      state.tasks = state.tasks.filter(function (t) { return !t.seed; });
+    }
+
+    var localById = {};
+    state.tasks.forEach(function (t) { localById[t.id] = t; });
+
+    var remoteIds = {};
+    var toPush = [];
+
+    remoteRows.forEach(function (row) {
+      var remote = taskFromRow(row);
+      remoteIds[remote.id] = true;
+      var local = localById[remote.id];
+
+      if (!local) {
+        state.tasks.push(remote);
+      } else if (remote.updatedAt > local.updatedAt) {
+        local.text = remote.text;
+        local.priority = remote.priority;
+        local.completed = remote.completed;
+        local.createdAt = remote.createdAt;
+        local.completedAt = remote.completedAt;
+        local.deletedAt = remote.deletedAt;
+        local.updatedAt = remote.updatedAt;
+        delete local.seed;
+      } else if (local.updatedAt > remote.updatedAt) {
+        toPush.push(rowFromTask(local));
+      }
+    });
+
+    // Anything the server has never seen.
+    state.tasks.forEach(function (t) {
+      if (!remoteIds[t.id]) toPush.push(rowFromTask(t));
+    });
+
+    return toPush;
+  }
+
+  // Points and theme live on one profile row, same last-write-wins rule.
+  // Returns the row to upload, or null when the server copy is newer.
+  function mergeProfile(remote) {
+    var uid = cloud.currentUser().id;
+    var mine = {
+      user_id: uid,
+      points: state.points,
+      theme: state.theme,
+      updated_at: new Date(state.profileUpdatedAt || Date.now()).toISOString()
+    };
+
+    if (!remote) return mine;               // first sync for this account
+
+    var remoteAt = toMs(remote.updated_at);
+    if (remoteAt > state.profileUpdatedAt) {
+      state.points = Math.max(0, Math.round(Number(remote.points) || 0));
+      if (remote.theme === "dark" || remote.theme === "light") state.theme = remote.theme;
+      state.profileUpdatedAt = remoteAt;
+      return null;
+    }
+    return state.profileUpdatedAt > remoteAt ? mine : null;
+  }
+
+  // Resolves true when everything is safely uploaded, false otherwise.
+  function syncNow() {
+    if (!signedIn()) return Promise.resolve(false);
+    if (syncing) { syncQueued = true; return Promise.resolve(false); }
+
+    syncing = true;
+    clearTimeout(syncTimer);
+    setSyncStatus("busy", "Syncing…");
+
+    return Promise.all([cloud.fetchTasks(), cloud.fetchProfile()])
+      .then(function (results) {
+        var toPush = mergeTasks(results[0] || []);
+        var profileRow = mergeProfile(results[1]);
+
+        save();
+        applyTheme();
+        render();
+
+        var jobs = [];
+        if (toPush.length) jobs.push(cloud.pushTasks(toPush));
+        if (profileRow) jobs.push(cloud.pushProfile(profileRow));
+        return Promise.all(jobs);
+      })
+      .then(function () {
+        syncing = false;
+        setSyncStatus("ok", "Synced ✓");
+        if (syncQueued) { syncQueued = false; scheduleSync(); }
+        return true;
+      })
+      .catch(function (err) {
+        syncing = false;
+        console.warn("Sync failed:", err);
+        // Local data is untouched - the next sync retries from where we are.
+        if (!navigator.onLine) setSyncStatus("error", "Offline");
+        else if (!cloud.isSignedIn()) { renderAccount(); setSyncStatus("error", "Sign in again"); }
+        else setSyncStatus("error", "Sync failed");
+        return false;
+      });
+  }
+
+  /* -- Account UI -------------------------------------------- */
+
+  var authMode = "signin";   // signin | signup
+
+  function renderAccount() {
+    if (!cloudReady()) {
+      // No Supabase details configured: stay a local-only app.
+      if (el.accountBtn) el.accountBtn.hidden = true;
+      setSyncStatus(null);
+      return;
+    }
+
+    el.accountBtn.hidden = false;
+    var user = cloud.currentUser();
+
+    if (user) {
+      el.accountIcon.textContent = (user.email || "?").charAt(0).toUpperCase();
+      el.accountBtn.setAttribute("aria-label", "Account: " + user.email);
+      el.accountBtn.title = "Signed in as " + user.email;
+      el.accountBtn.classList.add("is-signed-in");
+      el.footerNote.textContent = "Made with 💜 — synced to your account.";
+    } else {
+      el.footerNote.textContent = "Made with 💜 — your tasks are saved on this device.";
+      el.accountIcon.textContent = "☁️";
+      el.accountBtn.setAttribute("aria-label", "Sign in to sync your tasks");
+      el.accountBtn.title = "Sign in to sync";
+      el.accountBtn.classList.remove("is-signed-in");
+      setSyncStatus(null);
+    }
+  }
+
+  function setAuthMode(mode) {
+    authMode = mode;
+    var signup = mode === "signup";
+    el.authTitle.textContent = signup ? "Create an account ☁️" : "Sign in to sync ☁️";
+    el.authIntro.textContent = signup
+      ? "Pick an email and password. Your stars will then follow you to any device."
+      : "Your tasks and stars will follow you to any device.";
+    el.authSubmit.textContent = signup ? "Create account" : "Sign in";
+    el.authToggle.textContent = signup
+      ? "Already have an account? Sign in"
+      : "New here? Create an account";
+    el.authPassword.setAttribute("autocomplete", signup ? "new-password" : "current-password");
+    el.authForgot.hidden = signup;
+    setAuthMessage("");
+  }
+
+  function setAuthMessage(text, kind) {
+    el.authError.textContent = text || "";
+    el.authError.className = "sheet__message" + (kind ? " sheet__message--" + kind : "");
+  }
+
+  function friendlyAuthError(err) {
+    var msg = String((err && err.message) || "Something went wrong");
+    if (/invalid login credentials/i.test(msg)) return "That email and password don't match. Try again?";
+    if (/already registered|already been registered/i.test(msg)) return "That email already has an account - sign in instead.";
+    if (/email not confirmed/i.test(msg)) return "Check your inbox and confirm your email first.";
+    if (/password should be at least/i.test(msg)) return "Password needs to be at least 6 characters.";
+    if (/rate limit|too many/i.test(msg)) return "Too many tries. Wait a minute and try again.";
+    if (/failed to fetch|networkerror/i.test(msg)) return "No connection right now. Try again in a moment.";
+    return msg;
+  }
+
+  function openAuth() {
+    var user = cloud.currentUser();
+    el.authForm.hidden = !!user;
+    el.authAccount.hidden = !user;
+    if (user) {
+      el.authWho.textContent = user.email || "your account";
+    } else {
+      setAuthMode(authMode);
+      el.authPassword.value = "";
+    }
+    if (typeof el.authSheet.showModal === "function") el.authSheet.showModal();
+    else el.authSheet.setAttribute("open", "");
+    if (!user) el.authEmail.focus();
+  }
+
+  function closeAuth() {
+    if (typeof el.authSheet.close === "function") el.authSheet.close();
+    else el.authSheet.removeAttribute("open");
+  }
+
+  function submitAuth(event) {
+    event.preventDefault();
+    var email = el.authEmail.value.trim();
+    var password = el.authPassword.value;
+
+    if (!email || password.length < 6) {
+      setAuthMessage("Enter your email and a password of at least 6 characters.", "error");
+      return;
+    }
+
+    el.authSubmit.disabled = true;
+    setAuthMessage(authMode === "signup" ? "Creating your account…" : "Signing in…");
+
+    var op = authMode === "signup"
+      ? cloud.signUp(email, password)
+      : cloud.signIn(email, password);
+
+    op.then(function (result) {
+      el.authSubmit.disabled = false;
+
+      // Supabase confirms email addresses by default, so a new account has
+      // no session yet - the user has to click the link first.
+      if (authMode === "signup" && result && result.confirmed === false) {
+        setAuthMode("signin");
+        setAuthMessage("Check " + email + " for a confirmation link, then sign in.", "ok");
+        return null;
+      }
+
+      el.authPassword.value = "";
+      closeAuth();
+      renderAccount();
+      toast("Signed in - syncing your tasks ☁️");
+      return syncNow();
+    }).catch(function (err) {
+      el.authSubmit.disabled = false;
+      setAuthMessage(friendlyAuthError(err), "error");
+    });
+  }
+
+  function forgotPassword() {
+    var email = el.authEmail.value.trim();
+    if (!email) {
+      setAuthMessage("Type your email first, then tap this again.", "error");
+      el.authEmail.focus();
+      return;
+    }
+    setAuthMessage("Sending a reset link…");
+    cloud.sendPasswordReset(email)
+      .then(function () { setAuthMessage("Reset link sent to " + email + ".", "ok"); })
+      .catch(function (err) { setAuthMessage(friendlyAuthError(err), "error"); });
+  }
+
+  function finishSignOut() {
+    return cloud.signOut().then(function () {
+      // The account keeps the data. Clearing it locally matters on a shared
+      // device: the next person to sign in must not inherit these tasks.
+      state.tasks = [];
+      state.points = 0;
+      state.profileUpdatedAt = 0;
+      save();
+      closeAuth();
+      renderAccount();
+      setSyncStatus(null);
+      render();
+      toast("Signed out - your tasks are safe in your account 👋");
+    });
+  }
+
+  function doSignOut() {
+    if (!navigator.onLine) {
+      if (!window.confirm("You are offline, so recent changes may not have reached your account yet. Sign out anyway?")) return;
+      finishSignOut();
+      return;
+    }
+    // Flush pending changes first - signing out drops the local copy.
+    syncNow().then(function (ok) {
+      if (ok || window.confirm("Some changes could not be synced. Sign out anyway?")) finishSignOut();
+    });
   }
 
   /* -- Events ----------------------------------------------- */
@@ -530,6 +954,28 @@
   el.resetAll.addEventListener("click", resetEverything);
   el.themeToggle.addEventListener("click", toggleTheme);
 
+  // Account sheet
+  el.accountBtn.addEventListener("click", openAuth);
+  el.authForm.addEventListener("submit", submitAuth);
+  el.authToggle.addEventListener("click", function () {
+    setAuthMode(authMode === "signup" ? "signin" : "signup");
+  });
+  el.authForgot.addEventListener("click", forgotPassword);
+  el.authClose.addEventListener("click", closeAuth);
+  el.signOutBtn.addEventListener("click", doSignOut);
+  el.syncNowBtn.addEventListener("click", function () {
+    syncNow().then(function (ok) {
+      toast(ok ? "Everything is synced ✓" : "Could not sync right now - will retry");
+    });
+  });
+
+  // Coming back online, or returning to the tab, is the moment another
+  // device's changes are most likely waiting.
+  window.addEventListener("online", function () { if (signedIn()) syncNow(); });
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible" && signedIn()) syncNow();
+  });
+
   // Keep tabs in sync if the site is open twice on the same device.
   window.addEventListener("storage", function (event) {
     if (event.key !== STORAGE_KEY) return;
@@ -543,8 +989,9 @@
 
   load();
 
-  // First visit with no saved data: seed a few friendly examples.
-  if (state.tasks.length === 0 && state.points === 0) {
+  // First visit with no saved data: seed a few friendly examples. A signed-in
+  // device skips this - its tasks arrive from the account instead.
+  if (state.tasks.length === 0 && state.points === 0 && !signedIn()) {
     var seeds = [
       { text: "Brush my teeth 🦷", priority: "high" },
       { text: "Do my homework 📚", priority: "high" },
@@ -552,13 +999,17 @@
       { text: "Read for 10 minutes 📖", priority: "low" }
     ];
     seeds.forEach(function (seed, index) {
+      var created = Date.now() - (seeds.length - index) * 1000;
       state.tasks.push({
         id: makeId() + index,
         text: seed.text,
         priority: seed.priority,
         completed: false,
-        createdAt: Date.now() - (seeds.length - index) * 1000,
-        completedAt: null
+        createdAt: created,
+        completedAt: null,
+        updatedAt: created,
+        deletedAt: null,
+        seed: true      // flagged so a real account's tasks replace them
       });
     });
     save();
@@ -567,4 +1018,12 @@
   applyTheme();
   syncFilterButtons();
   render();
+
+  if (cloudReady()) {
+    renderAccount();
+    cloud.onChange(renderAccount);
+    if (signedIn()) syncNow();
+  } else if (el.accountBtn) {
+    el.accountBtn.hidden = true;
+  }
 })();
